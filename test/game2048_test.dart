@@ -2,8 +2,14 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:game2048/game_engine.dart';
 import 'package:game2048/main.dart';
+import 'package:game2048/score_store.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
+  setUp(() {
+    SharedPreferences.setMockInitialValues({});
+  });
+
   test('merges matching tiles once per move', () {
     final game = Game2048(
       initialBoard: [
@@ -73,5 +79,35 @@ void main() {
     expect(find.text('分数'), findsOneWidget);
     expect(find.text('最佳'), findsOneWidget);
     expect(find.byIcon(Icons.refresh_rounded), findsOneWidget);
+  });
+
+  testWidgets('opens the leaderboard from the best score box', (tester) async {
+    await tester.pumpWidget(const Game2048App());
+
+    await tester.tap(find.text('最佳'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('最佳成绩'), findsOneWidget);
+    expect(find.text('还没有成绩'), findsOneWidget);
+  });
+
+  test('stores the top ten scores with timestamps', () async {
+    final store = ScoreStore();
+    final baseTime = DateTime(2026, 7, 3, 10);
+
+    for (var index = 0; index < 12; index++) {
+      await store.recordScore(
+        gameId: 'game-$index',
+        score: index * 10,
+        achievedAt: baseTime.add(Duration(minutes: index)),
+      );
+    }
+
+    final records = await store.load();
+
+    expect(records, hasLength(10));
+    expect(records.first.score, 110);
+    expect(records.last.score, 20);
+    expect(records.first.achievedAt, baseTime.add(const Duration(minutes: 11)));
   });
 }

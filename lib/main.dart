@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import 'game_engine.dart';
+import 'score_store.dart';
 
 void main() {
   runApp(const Game2048App());
@@ -39,15 +40,42 @@ class GamePage extends StatefulWidget {
 
 class _GamePageState extends State<GamePage> {
   final Game2048 _game = Game2048();
+  final ScoreStore _scoreStore = ScoreStore();
   var _bestScore = 0;
   var _winAcknowledged = false;
+  var _topScores = <ScoreRecord>[];
+  String _currentGameId = _newGameId();
   MoveResult? _lastMove;
   var _moveSerial = 0;
   var _isAnimating = false;
 
+  static String _newGameId() {
+    return DateTime.now().microsecondsSinceEpoch.toString();
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    _loadScores();
+  }
+
+  Future<void> _loadScores() async {
+    final scores = await _scoreStore.load();
+    if (!mounted) {
+      return;
+    }
+
+    setState(() {
+      _topScores = scores;
+      _bestScore = scores.isEmpty ? 0 : scores.first.score;
+    });
+  }
+
   void _restart() {
+    _recordCurrentScore();
     setState(() {
       _game.reset();
+      _currentGameId = _newGameId();
       _lastMove = null;
       _moveSerial++;
       _isAnimating = false;
@@ -71,6 +99,33 @@ class _GamePageState extends State<GamePage> {
       _moveSerial++;
       _isAnimating = true;
     });
+    _recordCurrentScore();
+  }
+
+  Future<void> _recordCurrentScore() async {
+    if (_game.score <= 0) {
+      return;
+    }
+
+    final scores = await _scoreStore.recordScore(
+      gameId: _currentGameId,
+      score: _game.score,
+    );
+    if (!mounted) {
+      return;
+    }
+
+    setState(() {
+      _topScores = scores;
+      _bestScore = scores.isEmpty ? 0 : scores.first.score;
+    });
+  }
+
+  void _showLeaderboard() {
+    showDialog<void>(
+      context: context,
+      builder: (context) => _LeaderboardDialog(records: _topScores),
+    );
   }
 
   void _handlePanEnd(DragEndDetails details) {
@@ -151,6 +206,7 @@ class _GamePageState extends State<GamePage> {
                           _Header(
                             score: _game.score,
                             bestScore: _bestScore,
+                            onBestTap: _showLeaderboard,
                             onRestart: _restart,
                           ),
                           SizedBox(height: compact ? 16 : 26),
@@ -217,11 +273,13 @@ class _Header extends StatelessWidget {
   const _Header({
     required this.score,
     required this.bestScore,
+    required this.onBestTap,
     required this.onRestart,
   });
 
   final int score;
   final int bestScore;
+  final VoidCallback onBestTap;
   final VoidCallback onRestart;
 
   @override
@@ -248,7 +306,7 @@ class _Header extends StatelessWidget {
         ),
         _ScoreBox(label: '分数', value: score),
         const SizedBox(width: 8),
-        _ScoreBox(label: '最佳', value: bestScore),
+        _ScoreBox(label: '最佳', value: bestScore, onTap: onBestTap),
         const SizedBox(width: 8),
         IconButton.filled(
           onPressed: onRestart,
@@ -266,14 +324,15 @@ class _Header extends StatelessWidget {
 }
 
 class _ScoreBox extends StatelessWidget {
-  const _ScoreBox({required this.label, required this.value});
+  const _ScoreBox({required this.label, required this.value, this.onTap});
 
   final String label;
   final int value;
+  final VoidCallback? onTap;
 
   @override
   Widget build(BuildContext context) {
-    return Container(
+    final box = Container(
       width: 74,
       height: 48,
       alignment: Alignment.center,
@@ -307,7 +366,254 @@ class _ScoreBox extends StatelessWidget {
         ],
       ),
     );
+
+    if (onTap == null) {
+      return box;
+    }
+
+    return Tooltip(
+      message: '查看最佳成绩',
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: onTap,
+          borderRadius: BorderRadius.circular(8),
+          child: box,
+        ),
+      ),
+    );
   }
+}
+
+class _LeaderboardDialog extends StatelessWidget {
+  const _LeaderboardDialog({required this.records});
+
+  final List<ScoreRecord> records;
+
+  @override
+  Widget build(BuildContext context) {
+    final bestScore = records.isEmpty ? 0 : records.first.score;
+
+    return Dialog(
+      insetPadding: const EdgeInsets.symmetric(horizontal: 24, vertical: 28),
+      backgroundColor: Colors.transparent,
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 380),
+        child: Container(
+          decoration: BoxDecoration(
+            color: const Color(0xfff7f6ef),
+            borderRadius: BorderRadius.circular(18),
+            boxShadow: const [
+              BoxShadow(
+                color: Color(0x33000000),
+                blurRadius: 28,
+                offset: Offset(0, 14),
+              ),
+            ],
+          ),
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(18),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.fromLTRB(20, 18, 16, 18),
+                  color: const Color(0xff26332f),
+                  child: Row(
+                    children: [
+                      Container(
+                        width: 44,
+                        height: 44,
+                        decoration: BoxDecoration(
+                          color: const Color(0xfff0c85a),
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: const Icon(
+                          Icons.emoji_events_rounded,
+                          color: Color(0xff26332f),
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const Text(
+                              '最佳成绩',
+                              style: TextStyle(
+                                color: Colors.white,
+                                fontSize: 20,
+                                fontWeight: FontWeight.w900,
+                                height: 1.1,
+                              ),
+                            ),
+                            const SizedBox(height: 4),
+                            Text(
+                              '最高 $bestScore 分',
+                              style: const TextStyle(
+                                color: Color(0xffd6ddd2),
+                                fontSize: 13,
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      IconButton(
+                        onPressed: () => Navigator.of(context).pop(),
+                        tooltip: '关闭',
+                        icon: const Icon(Icons.close_rounded),
+                        color: Colors.white,
+                      ),
+                    ],
+                  ),
+                ),
+                Flexible(
+                  child: records.isEmpty
+                      ? const _EmptyLeaderboard()
+                      : ListView.separated(
+                          shrinkWrap: true,
+                          padding: const EdgeInsets.fromLTRB(16, 14, 16, 18),
+                          itemCount: records.length,
+                          separatorBuilder: (_, _) => const SizedBox(height: 8),
+                          itemBuilder: (context, index) {
+                            return _LeaderboardRow(
+                              rank: index + 1,
+                              record: records[index],
+                            );
+                          },
+                        ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _EmptyLeaderboard extends StatelessWidget {
+  const _EmptyLeaderboard();
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(24, 32, 24, 34),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: const [
+          Icon(Icons.query_stats_rounded, size: 42, color: Color(0xff87918a)),
+          SizedBox(height: 12),
+          Text(
+            '还没有成绩',
+            style: TextStyle(
+              color: Color(0xff26332f),
+              fontSize: 18,
+              fontWeight: FontWeight.w900,
+            ),
+          ),
+          SizedBox(height: 6),
+          Text(
+            '开始移动数字后会自动记录。',
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              color: Color(0xff56635f),
+              fontSize: 13,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _LeaderboardRow extends StatelessWidget {
+  const _LeaderboardRow({required this.rank, required this.record});
+
+  final int rank;
+  final ScoreRecord record;
+
+  @override
+  Widget build(BuildContext context) {
+    final accentColor = switch (rank) {
+      1 => const Color(0xffd9ae3f),
+      2 => const Color(0xff8e9aa4),
+      3 => const Color(0xffb97842),
+      _ => const Color(0xff56635f),
+    };
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 11),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: const Color(0xffe2e4dc)),
+      ),
+      child: Row(
+        children: [
+          Container(
+            width: 34,
+            height: 34,
+            alignment: Alignment.center,
+            decoration: BoxDecoration(
+              color: accentColor,
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: Text(
+              '$rank',
+              style: const TextStyle(
+                color: Colors.white,
+                fontSize: 15,
+                fontWeight: FontWeight.w900,
+              ),
+            ),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                FittedBox(
+                  fit: BoxFit.scaleDown,
+                  alignment: Alignment.centerLeft,
+                  child: Text(
+                    '${record.score} 分',
+                    style: const TextStyle(
+                      color: Color(0xff26332f),
+                      fontSize: 20,
+                      fontWeight: FontWeight.w900,
+                      height: 1.05,
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  _formatScoreTime(record.achievedAt),
+                  style: const TextStyle(
+                    color: Color(0xff56635f),
+                    fontSize: 12,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+String _formatScoreTime(DateTime achievedAt) {
+  final local = achievedAt.toLocal();
+  final month = local.month.toString().padLeft(2, '0');
+  final day = local.day.toString().padLeft(2, '0');
+  final hour = local.hour.toString().padLeft(2, '0');
+  final minute = local.minute.toString().padLeft(2, '0');
+  return '${local.year}.$month.$day $hour:$minute';
 }
 
 class _Board extends StatefulWidget {
