@@ -39,6 +39,33 @@ void main() {
     expect(game.move(MoveDirection.left).changed, isFalse);
   });
 
+  test('reports tile movement metadata for animations', () {
+    final game = Game2048(
+      initialBoard: [
+        [2, 0, 2, 0],
+        [0, 0, 0, 0],
+        [0, 0, 0, 0],
+        [0, 0, 0, 0],
+      ],
+    );
+
+    final result = game.move(MoveDirection.left);
+    final mergedTiles = result.movements.where((move) => move.merged).toList();
+
+    expect(result.changed, isTrue);
+    expect(result.spawnedTile, isNotNull);
+    expect(mergedTiles, hasLength(2));
+    expect(mergedTiles.map((move) => move.value), [2, 2]);
+    expect(mergedTiles.map((move) => move.from), [
+      const BoardCell(0, 0),
+      const BoardCell(0, 2),
+    ]);
+    expect(mergedTiles.map((move) => move.to), [
+      const BoardCell(0, 0),
+      const BoardCell(0, 0),
+    ]);
+  });
+
   testWidgets('renders the 2048 board', (tester) async {
     await tester.pumpWidget(const Game2048App());
 

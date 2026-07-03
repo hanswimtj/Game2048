@@ -41,15 +41,25 @@ class _GamePageState extends State<GamePage> {
   final Game2048 _game = Game2048();
   var _bestScore = 0;
   var _winAcknowledged = false;
+  MoveResult? _lastMove;
+  var _moveSerial = 0;
+  var _isAnimating = false;
 
   void _restart() {
     setState(() {
       _game.reset();
+      _lastMove = null;
+      _moveSerial++;
+      _isAnimating = false;
       _winAcknowledged = false;
     });
   }
 
   void _move(MoveDirection direction) {
+    if (_isAnimating) {
+      return;
+    }
+
     final result = _game.move(direction);
     if (!result.changed) {
       return;
@@ -57,6 +67,9 @@ class _GamePageState extends State<GamePage> {
 
     setState(() {
       _bestScore = math.max(_bestScore, _game.score);
+      _lastMove = result;
+      _moveSerial++;
+      _isAnimating = true;
     });
   }
 
@@ -104,17 +117,16 @@ class _GamePageState extends State<GamePage> {
   Widget build(BuildContext context) {
     final board = _game.board;
     final shouldShowWin =
-        _game.hasWon && !_winAcknowledged && !_game.isGameOver;
+        _game.hasWon && !_winAcknowledged && !_game.isGameOver && !_isAnimating;
 
-    return Scaffold(
-      backgroundColor: const Color(0xfff4f5ef),
-      body: SafeArea(
-        child: Focus(
-          autofocus: true,
-          onKeyEvent: _handleKey,
-          child: GestureDetector(
-            behavior: HitTestBehavior.opaque,
-            onPanEnd: _handlePanEnd,
+    return PopScope(
+      canPop: false,
+      child: Scaffold(
+        backgroundColor: const Color(0xfff4f5ef),
+        body: SafeArea(
+          child: Focus(
+            autofocus: true,
+            onKeyEvent: _handleKey,
             child: LayoutBuilder(
               builder: (context, constraints) {
                 final compact = constraints.maxHeight < 720;
@@ -147,7 +159,23 @@ class _GamePageState extends State<GamePage> {
                             height: boardSize,
                             child: Stack(
                               children: [
-                                _Board(board: board),
+                                GestureDetector(
+                                  behavior: HitTestBehavior.opaque,
+                                  onPanEnd: _handlePanEnd,
+                                  child: _Board(
+                                    board: board,
+                                    lastMove: _lastMove,
+                                    moveSerial: _moveSerial,
+                                    onAnimationFinished: () {
+                                      if (!mounted) {
+                                        return;
+                                      }
+                                      setState(() {
+                                        _isAnimating = false;
+                                      });
+                                    },
+                                  ),
+                                ),
                                 if (shouldShowWin)
                                   _StatusOverlay(
                                     title: '2048',
@@ -161,7 +189,7 @@ class _GamePageState extends State<GamePage> {
                                     secondaryLabel: '重开',
                                     onSecondary: _restart,
                                   ),
-                                if (_game.isGameOver)
+                                if (_game.isGameOver && !_isAnimating)
                                   _StatusOverlay(
                                     title: '结束',
                                     accentColor: const Color(0xffb64b45),
@@ -282,33 +310,264 @@ class _ScoreBox extends StatelessWidget {
   }
 }
 
-class _Board extends StatelessWidget {
-  const _Board({required this.board});
+class _Board extends StatefulWidget {
+  const _Board({
+    required this.board,
+    required this.lastMove,
+    required this.moveSerial,
+    required this.onAnimationFinished,
+  });
 
   final List<List<int>> board;
+  final MoveResult? lastMove;
+  final int moveSerial;
+  final VoidCallback onAnimationFinished;
+
+  @override
+  State<_Board> createState() => _BoardState();
+}
+
+class _BoardState extends State<_Board> with SingleTickerProviderStateMixin {
+  static const _padding = 10.0;
+  static const _gap = 10.0;
+  static const _popStart = 0.58;
+  static const _slideEnd = 0.68;
+
+  late final AnimationController _controller;
+  MoveResult? _activeMove;
+  var _seenMoveSerial = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller =
+        AnimationController(
+          vsync: this,
+          duration: const Duration(milliseconds: 245),
+        )..addStatusListener((status) {
+          if (status != AnimationStatus.completed) {
+            return;
+          }
+          widget.onAnimationFinished();
+        });
+  }
+
+  @override
+  void didUpdateWidget(covariant _Board oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.moveSerial == _seenMoveSerial) {
+      return;
+    }
+
+    _seenMoveSerial = widget.moveSerial;
+    final move = widget.lastMove;
+    if (move != null && move.changed) {
+      _activeMove = move;
+      _controller.forward(from: 0);
+    } else {
+      _activeMove = null;
+      _controller.stop();
+      _controller.value = 0;
+    }
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
     return Container(
-      padding: const EdgeInsets.all(10),
       decoration: BoxDecoration(
         color: const Color(0xff87918a),
         borderRadius: BorderRadius.circular(8),
       ),
-      child: GridView.builder(
-        physics: const NeverScrollableScrollPhysics(),
-        itemCount: Game2048.size * Game2048.size,
-        gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-          crossAxisCount: Game2048.size,
-          mainAxisSpacing: 10,
-          crossAxisSpacing: 10,
-        ),
-        itemBuilder: (context, index) {
-          final row = index ~/ Game2048.size;
-          final col = index % Game2048.size;
-          return _Tile(value: board[row][col]);
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final tileSize =
+              (constraints.maxWidth -
+                  _padding * 2 -
+                  _gap * (Game2048.size - 1)) /
+              Game2048.size;
+
+          return AnimatedBuilder(
+            animation: _controller,
+            builder: (context, _) {
+              final activeMove = _activeMove;
+              return Stack(
+                children: [
+                  for (var row = 0; row < Game2048.size; row++)
+                    for (var col = 0; col < Game2048.size; col++)
+                      _PositionedTile(
+                        key: ValueKey('background-$row-$col'),
+                        offset: _cellOffset(row, col, tileSize),
+                        size: tileSize,
+                        child: const _Tile(value: 0),
+                      ),
+                  if (activeMove == null)
+                    ..._buildSettledTiles(tileSize)
+                  else
+                    ..._buildAnimatedTiles(activeMove, tileSize),
+                ],
+              );
+            },
+          );
         },
       ),
+    );
+  }
+
+  List<Widget> _buildSettledTiles(double tileSize) {
+    final tiles = <Widget>[];
+    for (var row = 0; row < Game2048.size; row++) {
+      for (var col = 0; col < Game2048.size; col++) {
+        final value = widget.board[row][col];
+        if (value == 0) {
+          continue;
+        }
+
+        tiles.add(
+          _PositionedTile(
+            key: ValueKey('settled-$row-$col-$value'),
+            offset: _cellOffset(row, col, tileSize),
+            size: tileSize,
+            child: _Tile(value: value),
+          ),
+        );
+      }
+    }
+    return tiles;
+  }
+
+  List<Widget> _buildAnimatedTiles(MoveResult move, double tileSize) {
+    final tiles = <Widget>[];
+    final slideProgress = Curves.easeOutCubic.transform(
+      (_controller.value / _slideEnd).clamp(0.0, 1.0),
+    );
+    final hiddenCells = <BoardCell>{
+      for (final movement in move.movements)
+        if (slideProgress < 1 || movement.merged) movement.to,
+      if (move.spawnedTile != null) move.spawnedTile!.cell,
+    };
+
+    for (var row = 0; row < Game2048.size; row++) {
+      for (var col = 0; col < Game2048.size; col++) {
+        final value = widget.board[row][col];
+        final cell = BoardCell(row, col);
+        if (value == 0 || hiddenCells.contains(cell)) {
+          continue;
+        }
+
+        tiles.add(
+          _PositionedTile(
+            key: ValueKey('carried-$row-$col-$value'),
+            offset: _cellOffset(row, col, tileSize),
+            size: tileSize,
+            child: _Tile(value: value),
+          ),
+        );
+      }
+    }
+
+    if (slideProgress < 1) {
+      for (var index = 0; index < move.movements.length; index++) {
+        final movement = move.movements[index];
+        final from = _cellOffset(
+          movement.from.row,
+          movement.from.col,
+          tileSize,
+        );
+        final to = _cellOffset(movement.to.row, movement.to.col, tileSize);
+        final mergeFade =
+            ((_controller.value - _popStart) / (_slideEnd - _popStart)).clamp(
+              0.0,
+              1.0,
+            );
+        final opacity = movement.merged ? 1 - mergeFade : 1.0;
+        tiles.add(
+          _PositionedTile(
+            key: ValueKey(
+              'moving-$index-${movement.from.row}-${movement.from.col}'
+              '-${movement.to.row}-${movement.to.col}-${movement.value}',
+            ),
+            offset: Offset.lerp(from, to, slideProgress)!,
+            size: tileSize,
+            child: Opacity(
+              opacity: opacity,
+              child: _Tile(value: movement.value),
+            ),
+          ),
+        );
+      }
+    }
+
+    final popProgress = Curves.easeOutBack.transform(
+      ((_controller.value - _popStart) / (1 - _popStart)).clamp(0.0, 1.0),
+    );
+    if (_controller.value >= _popStart) {
+      final popCells = <BoardCell>{
+        for (final movement in move.movements)
+          if (movement.merged) movement.to,
+        if (move.spawnedTile != null) move.spawnedTile!.cell,
+      };
+
+      for (final cell in popCells) {
+        final value = widget.board[cell.row][cell.col];
+        if (value == 0) {
+          continue;
+        }
+
+        final isSpawned = move.spawnedTile?.cell == cell;
+        final scale = isSpawned
+            ? (0.25 + popProgress * 0.75)
+            : (0.78 + popProgress * 0.22);
+        tiles.add(
+          _PositionedTile(
+            key: ValueKey('pop-${cell.row}-${cell.col}-$value'),
+            offset: _cellOffset(cell.row, cell.col, tileSize),
+            size: tileSize,
+            child: Transform.scale(
+              scale: scale,
+              child: _Tile(value: value),
+            ),
+          ),
+        );
+      }
+    }
+
+    return tiles;
+  }
+
+  Offset _cellOffset(int row, int col, double tileSize) {
+    return Offset(
+      _padding + col * (tileSize + _gap),
+      _padding + row * (tileSize + _gap),
+    );
+  }
+}
+
+class _PositionedTile extends StatelessWidget {
+  const _PositionedTile({
+    super.key,
+    required this.offset,
+    required this.size,
+    required this.child,
+  });
+
+  final Offset offset;
+  final double size;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    return Positioned(
+      left: offset.dx,
+      top: offset.dy,
+      width: size,
+      height: size,
+      child: child,
     );
   }
 }
@@ -321,37 +580,29 @@ class _Tile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final empty = value == 0;
-    return AnimatedContainer(
-      duration: const Duration(milliseconds: 130),
-      curve: Curves.easeOutCubic,
+    return Container(
       alignment: Alignment.center,
       decoration: BoxDecoration(
         color: _tileColor(value),
         borderRadius: BorderRadius.circular(8),
       ),
-      child: AnimatedSwitcher(
-        duration: const Duration(milliseconds: 110),
-        child: empty
-            ? const SizedBox.shrink()
-            : FittedBox(
-                key: ValueKey(value),
-                fit: BoxFit.scaleDown,
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 6),
-                  child: Text(
-                    '$value',
-                    maxLines: 1,
-                    style: TextStyle(
-                      color: value <= 4
-                          ? const Color(0xff26332f)
-                          : Colors.white,
-                      fontSize: value < 1000 ? 34 : 28,
-                      fontWeight: FontWeight.w900,
-                    ),
+      child: empty
+          ? const SizedBox.shrink()
+          : FittedBox(
+              fit: BoxFit.scaleDown,
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 6),
+                child: Text(
+                  '$value',
+                  maxLines: 1,
+                  style: TextStyle(
+                    color: value <= 4 ? const Color(0xff26332f) : Colors.white,
+                    fontSize: value < 1000 ? 34 : 28,
+                    fontWeight: FontWeight.w900,
                   ),
                 ),
               ),
-      ),
+            ),
     );
   }
 
