@@ -48,6 +48,9 @@ class _GamePageState extends State<GamePage> {
   MoveResult? _lastMove;
   var _moveSerial = 0;
   var _isAnimating = false;
+  int? _swipePointer;
+  Offset? _swipeStart;
+  Duration? _swipeStartTime;
 
   static String _newGameId() {
     return DateTime.now().microsecondsSinceEpoch.toString();
@@ -128,8 +131,40 @@ class _GamePageState extends State<GamePage> {
     );
   }
 
-  void _handlePanEnd(DragEndDetails details) {
-    final velocity = details.velocity.pixelsPerSecond;
+  void _handlePointerDown(
+    PointerDownEvent event,
+    double boardSize,
+    double viewportWidth,
+  ) {
+    final boardLeft = (viewportWidth - boardSize) / 2;
+    final pointerX = event.localPosition.dx;
+    if (pointerX < boardLeft || pointerX > boardLeft + boardSize) {
+      _clearSwipeTracking();
+      return;
+    }
+
+    _swipePointer = event.pointer;
+    _swipeStart = event.localPosition;
+    _swipeStartTime = event.timeStamp;
+  }
+
+  void _handlePointerUp(PointerUpEvent event) {
+    final start = _swipeStart;
+    final startTime = _swipeStartTime;
+    if (event.pointer != _swipePointer || start == null || startTime == null) {
+      return;
+    }
+
+    _clearSwipeTracking();
+    final delta = event.localPosition - start;
+    final elapsedSeconds =
+        (event.timeStamp - startTime).inMicroseconds /
+        Duration.microsecondsPerSecond;
+    if (elapsedSeconds <= 0) {
+      return;
+    }
+
+    final velocity = delta / elapsedSeconds;
     if (velocity.distance < 120) {
       return;
     }
@@ -139,6 +174,12 @@ class _GamePageState extends State<GamePage> {
     } else {
       _move(velocity.dy > 0 ? MoveDirection.down : MoveDirection.up);
     }
+  }
+
+  void _clearSwipeTracking() {
+    _swipePointer = null;
+    _swipeStart = null;
+    _swipeStartTime = null;
   }
 
   KeyEventResult _handleKey(FocusNode node, KeyEvent event) {
@@ -194,31 +235,35 @@ class _GamePageState extends State<GamePage> {
                     )
                     .clamp(170.0, 520.0);
 
-                return Center(
-                  child: SingleChildScrollView(
-                    physics: const NeverScrollableScrollPhysics(),
-                    padding: const EdgeInsets.fromLTRB(16, 18, 16, 24),
-                    child: ConstrainedBox(
-                      constraints: const BoxConstraints(maxWidth: 560),
-                      child: Column(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          _Header(
-                            score: _game.score,
-                            bestScore: _bestScore,
-                            onBestTap: _showLeaderboard,
-                            onRestart: _restart,
-                          ),
-                          SizedBox(height: compact ? 16 : 26),
-                          SizedBox(
-                            width: boardSize,
-                            height: boardSize,
-                            child: Stack(
-                              children: [
-                                GestureDetector(
-                                  behavior: HitTestBehavior.opaque,
-                                  onPanEnd: _handlePanEnd,
-                                  child: _Board(
+                return Listener(
+                  behavior: HitTestBehavior.translucent,
+                  onPointerDown: (event) {
+                    _handlePointerDown(event, boardSize, constraints.maxWidth);
+                  },
+                  onPointerUp: _handlePointerUp,
+                  onPointerCancel: (_) => _clearSwipeTracking(),
+                  child: Center(
+                    child: SingleChildScrollView(
+                      physics: const NeverScrollableScrollPhysics(),
+                      padding: const EdgeInsets.fromLTRB(16, 18, 16, 24),
+                      child: ConstrainedBox(
+                        constraints: const BoxConstraints(maxWidth: 560),
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            _Header(
+                              score: _game.score,
+                              bestScore: _bestScore,
+                              onBestTap: _showLeaderboard,
+                              onRestart: _restart,
+                            ),
+                            SizedBox(height: compact ? 16 : 26),
+                            SizedBox(
+                              width: boardSize,
+                              height: boardSize,
+                              child: Stack(
+                                children: [
+                                  _Board(
                                     board: board,
                                     lastMove: _lastMove,
                                     moveSerial: _moveSerial,
@@ -231,31 +276,31 @@ class _GamePageState extends State<GamePage> {
                                       });
                                     },
                                   ),
-                                ),
-                                if (shouldShowWin)
-                                  _StatusOverlay(
-                                    title: '2048',
-                                    accentColor: const Color(0xff2f8f83),
-                                    primaryLabel: '继续',
-                                    onPrimary: () {
-                                      setState(() {
-                                        _winAcknowledged = true;
-                                      });
-                                    },
-                                    secondaryLabel: '重开',
-                                    onSecondary: _restart,
-                                  ),
-                                if (_game.isGameOver && !_isAnimating)
-                                  _StatusOverlay(
-                                    title: '结束',
-                                    accentColor: const Color(0xffb64b45),
-                                    primaryLabel: '再来',
-                                    onPrimary: _restart,
-                                  ),
-                              ],
+                                  if (shouldShowWin)
+                                    _StatusOverlay(
+                                      title: '2048',
+                                      accentColor: const Color(0xff2f8f83),
+                                      primaryLabel: '继续',
+                                      onPrimary: () {
+                                        setState(() {
+                                          _winAcknowledged = true;
+                                        });
+                                      },
+                                      secondaryLabel: '重开',
+                                      onSecondary: _restart,
+                                    ),
+                                  if (_game.isGameOver && !_isAnimating)
+                                    _StatusOverlay(
+                                      title: '结束',
+                                      accentColor: const Color(0xffb64b45),
+                                      primaryLabel: '再来',
+                                      onPrimary: _restart,
+                                    ),
+                                ],
+                              ),
                             ),
-                          ),
-                        ],
+                          ],
+                        ),
                       ),
                     ),
                   ),
